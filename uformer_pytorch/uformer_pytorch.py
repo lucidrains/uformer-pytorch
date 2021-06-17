@@ -18,6 +18,9 @@ List = nn.ModuleList
 def exists(val):
     return val is not None
 
+def cast_tuple(val, depth = 1):
+    return val if isinstance(val, tuple) else (val,) * depth
+
 # positional embeddings
 
 def apply_rotary_emb(q, k, pos_emb):
@@ -42,18 +45,25 @@ class AxialRotaryEmbedding(nn.Module):
         self.register_buffer('scales', scales)
 
     def forward(self, x):
-        device, dtype, n = x.device, x.dtype, x.shape[-1]
+        device, dtype, h, w = x.device, x.dtype, *x.shape[-2:]
 
-        seq = torch.linspace(-1., 1., steps = n, device = device)
-        seq = seq.unsqueeze(-1)
+        seq_x = torch.linspace(-1., 1., steps = h, device = device)
+        seq_x = seq_x.unsqueeze(-1)
 
-        scales = self.scales[(*((None,) * (len(seq.shape) - 1)), Ellipsis)]
+        seq_y = torch.linspace(-1., 1., steps = w, device = device)
+        seq_y = seq_y.unsqueeze(-1)
+
+        scales = self.scales[(*((None,) * (len(seq_x.shape) - 1)), Ellipsis)]
         scales = scales.to(x)
 
-        seq = seq * scales * pi
+        scales = self.scales[(*((None,) * (len(seq_y.shape) - 1)), Ellipsis)]
+        scales = scales.to(x)
 
-        x_sinu = repeat(seq, 'i d -> i j d', j = n)
-        y_sinu = repeat(seq, 'j d -> i j d', i = n)
+        seq_x = seq_x * scales * pi
+        seq_y = seq_y * scales * pi
+
+        x_sinu = repeat(seq_x, 'i d -> i j d', j = w)
+        y_sinu = repeat(seq_y, 'j d -> i j d', i = h)
 
         sin = torch.cat((x_sinu.sin(), y_sinu.sin()), dim = -1)
         cos = torch.cat((x_sinu.cos(), y_sinu.cos()), dim = -1)
@@ -233,10 +243,13 @@ class Uformer(nn.Module):
         )
 
         self.downs = List([])
-        self.mid = Block(dim = dim * 2 ** stages, depth = num_blocks, dim_head = dim_head, heads = heads, ff_mult = ff_mult, window_size = window_size, time_emb_dim = time_emb_dim)
         self.ups = List([])
 
-        for ind in range(stages):
+        heads, window_size, dim_head, num_blocks = map(partial(cast_tuple, depth = stages), (heads, window_size, dim_head, num_blocks))
+
+        for ind, heads, window_size, dim_head, num_blocks in zip(range(stages), heads, window_size, dim_head, num_blocks):
+            is_last = ind == (stages - 1)
+
             self.downs.append(List([
                 Block(dim, depth = num_blocks, dim_head = dim_head, heads = heads, ff_mult = ff_mult, window_size = window_size, time_emb_dim = time_emb_dim),
                 nn.Conv2d(dim, dim * 2, 4, stride = 2, padding = 1)
@@ -248,6 +261,9 @@ class Uformer(nn.Module):
             ]))
 
             dim *= 2
+
+            if is_last:
+                self.mid = Block(dim = dim, depth = num_blocks, dim_head = dim_head, heads = heads, ff_mult = ff_mult, window_size = window_size, time_emb_dim = time_emb_dim)
 
     def forward(
         self,

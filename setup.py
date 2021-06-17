@@ -3,7 +3,7 @@ from setuptools import setup, find_packages
 setup(
   name = 'uformer-pytorch',
   packages = find_packages(),
-  version = '0.0.4',
+  version = '0.0.5',
   license='MIT',
   description = 'Uformer - Pytorch',
   author = 'Phil Wang',
