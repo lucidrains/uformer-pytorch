@@ -18,6 +18,9 @@ List = nn.ModuleList
 def exists(val):
     return val is not None
 
+def default(val, d):
+    return val if exists(val) else d
+
 def cast_tuple(val, depth = 1):
     return val if isinstance(val, tuple) else (val,) * depth
 
@@ -218,9 +221,14 @@ class Uformer(nn.Module):
         window_size = 16,
         heads = 8,
         ff_mult = 4,
-        time_emb = False
+        time_emb = False,
+        input_channels = None,
+        output_channels = None
     ):
         super().__init__()
+        input_channels = default(input_channels, channels)
+        output_channels = default(output_channels, channels)
+
         self.to_time_emb = None
         time_emb_dim = None
 
@@ -234,12 +242,12 @@ class Uformer(nn.Module):
             )
 
         self.project_in = nn.Sequential(
-            nn.Conv2d(channels, dim, 3, padding = 1),
+            nn.Conv2d(input_channels, dim, 3, padding = 1),
             nn.GELU()
         )
 
         self.project_out = nn.Sequential(
-            nn.Conv2d(dim, channels, 3, padding = 1),
+            nn.Conv2d(dim, output_channels, 3, padding = 1),
         )
 
         self.downs = List([])
