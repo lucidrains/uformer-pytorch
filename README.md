@@ -1,6 +1,6 @@
 <img src="./uformer.png" width="450px"/>
 
-## Uformer - Pytorch (wip)
+## Uformer - Pytorch
 
 Implementation of <a href="https://arxiv.org/abs/2106.03106">Uformer</a>, Attention-based Unet, in Pytorch. It will only offer the concat-cross-skip connection.
 
