@@ -1,6 +1,6 @@
 ## Uformer - Pytorch (wip)
 
-Implementation of <a href="https://arxiv.org/abs/2106.03106">Uformer</a>, Attention-based Unet, in Pytorch. This specific repository will also enhance the Uformer for use in <a href="https://github.com/lucidrains/ddpm-proteins">DDPM</a>. Specifically, it will include the ability to condition on time steps, as well as enhanced 2d rotary positional embedding.
+Implementation of <a href="https://arxiv.org/abs/2106.03106">Uformer</a>, Attention-based Unet, in Pytorch. This repository will be geared towards use in a project <a href="https://github.com/lucidrains/ddpm-proteins">for learning protein structures</a>. Specifically, it will include the ability to condition on time steps (needed for DDPM), as well as 2d relative positional encoding using rotary embeddings.
 
 ## Citations
 
