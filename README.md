@@ -32,6 +32,28 @@ x = torch.randn(1, 3, 256, 256)
 pred = model(x) # (1, 3, 256, 256)
 ```
 
+To condition on time for DDPM training
+
+```python
+import torch
+from uformer_pytorch import Uformer
+
+model = Uformer(
+    dim = 64,
+    stages = 4,
+    num_blocks = 2,
+    window_size = 16,
+    dim_head = 64,
+    heads = 8,
+    ff_mult = 4,
+    time_emb = True    # set this to true
+)
+
+x = torch.randn(1, 3, 256, 256)
+time = torch.arange(1)
+pred = model(x, time = time) # (1, 3, 256, 256)
+```
+
 ## Citations
 
 ```bibtex

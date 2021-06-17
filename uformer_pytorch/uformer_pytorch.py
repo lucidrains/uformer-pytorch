@@ -1,4 +1,6 @@
+import math
 from functools import partial
+
 import torch
 from torch import nn, einsum
 import torch.nn.functional as F
@@ -14,6 +16,22 @@ List = nn.ModuleList
 
 def exists(val):
     return val is not None
+
+# positional embeddings
+
+class TimeSinuPosEmb(nn.Module):
+    def __init__(self, dim):
+        super().__init__()
+        self.dim = dim
+
+    def forward(self, x):
+        device = x.device
+        half_dim = self.dim // 2
+        emb = math.log(10000) / (half_dim - 1)
+        emb = torch.exp(torch.arange(half_dim, device = device) * -emb)
+        emb = einsum('i, j -> i  j', x, emb)
+        emb = torch.cat((emb.sin(), emb.cos()), dim = -1)
+        return emb
 
 # helper classes
 
@@ -39,8 +57,13 @@ class Attention(nn.Module):
         self.to_kv = nn.Conv2d(dim, inner_dim * 2, 1, bias = False)
         self.to_out = nn.Conv2d(inner_dim, dim, 1)
 
-    def forward(self, x, skip = None):
+    def forward(self, x, skip = None, time_emb = None):
         h, w, b = self.heads, self.window_size, x.shape[0]
+
+        if exists(time_emb):
+            time_emb = rearrange(time_emb, 'b c -> b c () ()')
+            x = x + time_emb
+
         q = self.to_q(x)
 
         kv_input = x
@@ -67,15 +90,19 @@ class FeedForward(nn.Module):
     def __init__(self, dim, mult = 4):
         super().__init__()
         hidden_dim = dim * mult
-        self.net = nn.Sequential(
-            nn.Conv2d(dim, hidden_dim, 1),
+        self.project_in = nn.Conv2d(dim, hidden_dim, 1)
+        self.project_out = nn.Sequential(
             nn.Conv2d(hidden_dim, hidden_dim, 3, padding = 1),
             nn.GELU(),
             nn.Conv2d(hidden_dim, dim, 1)
         )
 
-    def forward(self, x):
-        return self.net(x)
+    def forward(self, x, time_emb = None):
+        x = self.project_in(x)
+        if exists(time_emb):
+            time_emb = rearrange(time_emb, 'b c -> b c () ()')
+            x = x + time_emb
+        return self.project_out(x)
 
 class Block(nn.Module):
     def __init__(
@@ -85,9 +112,16 @@ class Block(nn.Module):
         dim_head = 64,
         heads = 8,
         ff_mult = 4,
-        window_size = 16
+        window_size = 16,
+        time_emb_dim = None
     ):
         super().__init__()
+        self.attn_time_emb = None
+        self.ff_time_emb = None
+        if exists(time_emb_dim):
+            self.attn_time_emb = nn.Sequential(nn.GELU(), nn.Linear(time_emb_dim, dim))
+            self.ff_time_emb = nn.Sequential(nn.GELU(), nn.Linear(time_emb_dim, dim * ff_mult))
+
         self.layers = List([])
         for _ in range(depth):
             self.layers.append(List([
@@ -95,10 +129,17 @@ class Block(nn.Module):
                 PreNorm(dim, FeedForward(dim, mult = ff_mult))
             ]))
 
-    def forward(self, x, skip = None):
+    def forward(self, x, skip = None, time = None):
+        attn_time_emb = None
+        ff_time_emb = None
+        if exists(time):
+            assert exists(self.attn_time_emb) and exists(self.ff_time_emb), 'time_emb_dim must be given on init if you are conditioning based on time'
+            attn_time_emb = self.attn_time_emb(time)
+            ff_time_emb = self.ff_time_emb(time)
+
         for attn, ff in self.layers:
-            x = attn(x, skip = skip) + x
-            x = ff(x) + x
+            x = attn(x, skip = skip, time_emb = attn_time_emb) + x
+            x = ff(x, time_emb = ff_time_emb) + x
         return x
 
 # classes
@@ -113,12 +154,25 @@ class Uformer(nn.Module):
         dim_head = 64,
         window_size = 16,
         heads = 8,
-        ff_mult = 4
+        ff_mult = 4,
+        time_emb = False
     ):
         super().__init__()
+        self.to_time_emb = None
+        time_emb_dim = None
+
+        if time_emb:
+            time_emb_dim = dim
+            self.to_time_emb = nn.Sequential(
+                TimeSinuPosEmb(dim),
+                nn.Linear(dim, dim * 4),
+                nn.GELU(),
+                nn.Linear(dim * 4, dim)
+            )
+
         self.project_in = nn.Sequential(
             nn.Conv2d(channels, dim, 3, padding = 1),
-            nn.LeakyReLU()
+            nn.GELU()
         )
 
         self.project_out = nn.Sequential(
@@ -126,39 +180,45 @@ class Uformer(nn.Module):
         )
 
         self.downs = List([])
-        self.mid = Block(dim = dim * 2 ** stages, depth = num_blocks, dim_head = dim_head, heads = heads, ff_mult = ff_mult, window_size = window_size)
+        self.mid = Block(dim = dim * 2 ** stages, depth = num_blocks, dim_head = dim_head, heads = heads, ff_mult = ff_mult, window_size = window_size, time_emb_dim = time_emb_dim)
         self.ups = List([])
 
         for ind in range(stages):
             self.downs.append(List([
-                Block(dim, depth = num_blocks, dim_head = dim_head, heads = heads, ff_mult = ff_mult, window_size = window_size),
+                Block(dim, depth = num_blocks, dim_head = dim_head, heads = heads, ff_mult = ff_mult, window_size = window_size, time_emb_dim = time_emb_dim),
                 nn.Conv2d(dim, dim * 2, 4, stride = 2, padding = 1)
             ]))
 
             self.ups.append(List([
                 nn.ConvTranspose2d(dim * 2, dim, 2, stride = 2),
-                Block(dim, depth = num_blocks, dim_head = dim_head, heads = heads, ff_mult = ff_mult, window_size = window_size)
+                Block(dim, depth = num_blocks, dim_head = dim_head, heads = heads, ff_mult = ff_mult, window_size = window_size, time_emb_dim = time_emb_dim)
             ]))
 
             dim *= 2
 
     def forward(
         self,
-        x
+        x,
+        time = None
     ):
+        if exists(time):
+            assert exists(self.to_time_emb), 'time_emb must be set to true to condition on time'
+            time = time.to(x)
+            time = self.to_time_emb(time)
+
         x = self.project_in(x)
 
         skips = []
         for block, downsample in self.downs:
-            x = block(x)
+            x = block(x, time = time)
             skips.append(x)
             x = downsample(x)
 
-        x = self.mid(x)
+        x = self.mid(x, time = time)
 
         for (upsample, block), skip in zip(reversed(self.ups), reversed(skips)):
             x = upsample(x)
-            x = block(x, skip = skip)
+            x = block(x, skip = skip, time = time)
 
         x = self.project_out(x)
         return x
