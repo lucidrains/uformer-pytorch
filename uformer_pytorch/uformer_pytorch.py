@@ -28,10 +28,11 @@ class PreNorm(nn.Module):
         return self.fn(x, **kwargs)
 
 class Attention(nn.Module):
-    def __init__(self, dim, dim_head = 64, heads = 8):
+    def __init__(self, dim, dim_head = 64, heads = 8, window_size = 16):
         super().__init__()
         self.scale = dim_head ** -0.5
         self.heads = heads
+        self.window_size = window_size
         inner_dim = dim_head * heads
 
         self.to_q = nn.Conv2d(dim, inner_dim, 1, bias = False)
@@ -39,7 +40,7 @@ class Attention(nn.Module):
         self.to_out = nn.Conv2d(inner_dim, dim, 1)
 
     def forward(self, x, skip = None):
-        h, y = self.heads, x.shape[-1]
+        h, w, b = self.heads, self.window_size, x.shape[0]
         q = self.to_q(x)
 
         kv_input = x
@@ -48,7 +49,9 @@ class Attention(nn.Module):
             kv_input = torch.cat((kv_input, skip), dim = 0)
 
         k, v = self.to_kv(kv_input).chunk(2, dim = 1)
-        q, k, v = map(lambda t: rearrange(t, 'b (h c) x y -> (b h) (x y) c', h = h), (q, k, v))
+        q, k, v = map(lambda t: rearrange(t, 'b (h c) x y -> (b h) x y c', h = h), (q, k, v))
+
+        q, k, v = map(lambda t: rearrange(t, 'b (x w1) (y w2) c -> (b x y) (w1 w2) c', w1 = w, w2 = w), (q, k, v))
 
         if exists(skip):
             k, v = map(lambda t: rearrange(t, '(r b) n d -> b (r n) d', r = 2), (k, v))
@@ -57,7 +60,7 @@ class Attention(nn.Module):
         attn = sim.softmax(dim = -1)
         out = einsum('b i j, b j d -> b i d', attn, v)
 
-        out = rearrange(out, '(b h) (x y) c -> b (h c) x y', h = h, y = y)
+        out = rearrange(out, '(b h x y) (w1 w2) c -> b (h c) (x w1) (y w2)', b = b, h = h, y = x.shape[-1] // w, w1 = w, w2 = w)
         return self.to_out(out)
 
 class FeedForward(nn.Module):
@@ -81,13 +84,14 @@ class Block(nn.Module):
         depth,
         dim_head = 64,
         heads = 8,
-        ff_mult = 4
+        ff_mult = 4,
+        window_size = 16
     ):
         super().__init__()
         self.layers = List([])
         for _ in range(depth):
             self.layers.append(List([
-                PreNorm(dim, Attention(dim, dim_head = dim_head, heads = heads)),
+                PreNorm(dim, Attention(dim, dim_head = dim_head, heads = heads, window_size = window_size)),
                 PreNorm(dim, FeedForward(dim, mult = ff_mult))
             ]))
 
@@ -107,6 +111,7 @@ class Uformer(nn.Module):
         stages = 4,
         num_blocks = 2,
         dim_head = 64,
+        window_size = 16,
         heads = 8,
         ff_mult = 4
     ):
@@ -121,18 +126,18 @@ class Uformer(nn.Module):
         )
 
         self.downs = List([])
-        self.mid = Block(dim = dim * 2 ** stages, depth = num_blocks, dim_head = dim_head, heads = heads, ff_mult = ff_mult)
+        self.mid = Block(dim = dim * 2 ** stages, depth = num_blocks, dim_head = dim_head, heads = heads, ff_mult = ff_mult, window_size = window_size)
         self.ups = List([])
 
         for ind in range(stages):
             self.downs.append(List([
-                Block(dim, depth = num_blocks, dim_head = dim_head, heads = heads, ff_mult = ff_mult),
+                Block(dim, depth = num_blocks, dim_head = dim_head, heads = heads, ff_mult = ff_mult, window_size = window_size),
                 nn.Conv2d(dim, dim * 2, 4, stride = 2, padding = 1)
             ]))
 
             self.ups.append(List([
                 nn.ConvTranspose2d(dim * 2, dim, 2, stride = 2),
-                Block(dim, depth = num_blocks, dim_head = dim_head, heads = heads, ff_mult = ff_mult)
+                Block(dim, depth = num_blocks, dim_head = dim_head, heads = heads, ff_mult = ff_mult, window_size = window_size)
             ]))
 
             dim *= 2

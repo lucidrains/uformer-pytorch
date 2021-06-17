@@ -19,16 +19,17 @@ import torch
 from uformer_pytorch import Uformer
 
 model = Uformer(
-    dim = 64,       # initial dimensions after input projection, which increases by 2x each stage
-    stages = 4,     # number of stages
-    num_blocks = 2, # number of transformer blocks per stage
+    dim = 64,           # initial dimensions after input projection, which increases by 2x each stage
+    stages = 4,         # number of stages
+    num_blocks = 2,     # number of transformer blocks per stage
+    window_size = 16,   # set window size (along one side) for which to do the attention within
     dim_head = 64,
     heads = 8,
     ff_mult = 4
 )
 
-x = torch.randn(1, 3, 64, 64)
-pred = model(x) # (1, 3, 64, 64)
+x = torch.randn(1, 3, 256, 256)
+pred = model(x) # (1, 3, 256, 256)
 ```
 
 ## Citations
