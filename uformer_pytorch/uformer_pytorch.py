@@ -10,7 +10,6 @@ from einops import rearrange, repeat
 
 # constants
 
-LayerNorm = partial(nn.InstanceNorm2d, affine = True)
 List = nn.ModuleList
 
 # helpers
@@ -44,7 +43,7 @@ class AxialRotaryEmbedding(nn.Module):
     def __init__(self, dim, max_freq = 10):
         super().__init__()
         self.dim = dim
-        scales = torch.logspace(0., log(max_freq / 2) / log(2), self.dim // 4, base = 2)
+        scales = torch.linspace(1., max_freq / 2, self.dim // 4)
         self.register_buffer('scales', scales)
 
     def forward(self, x):
